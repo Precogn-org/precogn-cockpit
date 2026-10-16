@@ -1,10 +1,14 @@
-# precogn-cockpit
+# PreCogn Cockpit
 
-**A file-based bridge for coordinating persistent Claude Code agents from a ChatGPT conversation.**
+## Vibe Coding with AI Agents
 
-Tested in one ChatGPT Go setup through a remote-shell tool. Availability depends on the remote-shell integration and the permissions of the account; this is not a universal guarantee for every ChatGPT plan or configuration.
+**Human-directed. Verifiable. Open source.**
 
-`precogn-cockpit` is a tiny, file-based bridge that lets a ChatGPT conversation (the *boss*) send instructions to a team of Claude Code agents running 24/7 on a VPS, wait for their answers, and collect what they reported in between.
+A file-based bridge for coordinating persistent Claude Code agents from a ChatGPT conversation.
+
+**Our approach:** combine the creative speed of Vibe Coding with coordinated AI agents, human control, verifiable workflows, and open-source tools.
+
+Built for developers who want to move beyond one AI assistant and orchestrate a team of agents while keeping the human in control of merges and deployments.
 
 It was built while running [Structory](https://structory.ai) with one human, one ChatGPT "boss" and a dozen Claude Code agents.
 
