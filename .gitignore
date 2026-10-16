@@ -1,0 +1,18 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime state, mailboxes and logs
+*.log
+link/
+cockpit-link/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local editor / OS files
+.DS_Store

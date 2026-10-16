@@ -1,0 +1,24 @@
+# Illustrative user unit for a persistent Claude Code Remote Control session.
+# Validate this unit on your target OS and review permissions before enabling it.
+# Install:  cp claude-agent@.service ~/.config/systemd/user/
+#           loginctl enable-linger "$USER"     # run without an open login
+#           systemctl --user enable --now claude-agent@my-agent
+# Expects ~/.config/claude-agents/<name>.env with AGENT_NAME and AGENT_DIR.
+[Unit]
+Description=Persistent Claude Code agent %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/claude-agents/%i.env
+WorkingDirectory=%h
+# Never run agents in auto/bypass permission mode on a server.
+ExecStart=/usr/bin/env bash -lc 'tmux new-session -d -s "agent-%i" -c "$AGENT_DIR" "claude remote-control --name \"$AGENT_NAME\" --permission-mode default" && sleep infinity'
+ExecStop=/usr/bin/env tmux kill-session -t agent-%i
+KillMode=process
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
