@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Persistent, file-backed message bus for independent Cockpit agent sessions.
+"""Persistent mailbox for independent Cockpit agent sessions.
 
-Messages are data only: this tool never executes message content or grants tool access.
+Messages are untrusted data. This program never executes message content or grants tool access.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
+MESSAGE_RE = re.compile(r"^[a-f0-9]{32}$")
 MAX_BODY = 64 * 1024
 
 
@@ -29,6 +30,12 @@ def root() -> Path:
 def valid_id(value: str) -> str:
     if not ID_RE.fullmatch(value):
         raise ValueError("invalid session id (use 1-64 letters, digits, dot, underscore or hyphen)")
+    return value
+
+
+def valid_message_id(value: str) -> str:
+    if not MESSAGE_RE.fullmatch(value):
+        raise ValueError("invalid message id")
     return value
 
 
@@ -60,6 +67,23 @@ def registered(base: Path, session: str) -> dict:
     return load_json(path)
 
 
+def enqueue(base: Path, sender: str, recipient: str, body: str, in_reply_to: str | None = None) -> str:
+    sender_record = registered(base, sender)
+    registered(base, recipient)
+    if len(body.encode("utf-8")) > MAX_BODY:
+        raise ValueError(f"message exceeds {MAX_BODY} bytes")
+    message_id = uuid.uuid4().hex
+    record = {
+        "id": message_id, "from": sender_record["id"], "to": recipient,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "body": body, "status": "queued",
+    }
+    if in_reply_to:
+        record["in_reply_to"] = valid_message_id(in_reply_to)
+    atomic_json(base / "mailboxes" / recipient / f"{message_id}.json", record)
+    return message_id
+
+
 def cmd_register(args: argparse.Namespace) -> None:
     base = root()
     sid = valid_id(args.session)
@@ -74,20 +98,7 @@ def cmd_register(args: argparse.Namespace) -> None:
 
 
 def cmd_send(args: argparse.Namespace) -> None:
-    base = root()
-    sender = registered(base, args.sender)
-    registered(base, args.recipient)
-    body = args.body
-    if len(body.encode("utf-8")) > MAX_BODY:
-        raise ValueError(f"message exceeds {MAX_BODY} bytes")
-    message_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
-    record = {
-        "id": message_id, "from": sender["id"], "to": args.recipient,
-        "created_at": now, "body": body, "status": "queued",
-    }
-    atomic_json(base / "mailboxes" / args.recipient / f"{message_id}.json", record)
-    print(message_id)
+    print(enqueue(root(), args.sender, args.recipient, args.body))
 
 
 def cmd_inbox(args: argparse.Namespace) -> None:
@@ -102,7 +113,7 @@ def cmd_inbox(args: argparse.Namespace) -> None:
             continue
         print(json.dumps(item, ensure_ascii=False))
         shown += 1
-        if args.limit and shown >= args.limit:
+        if shown >= args.limit:
             break
     if shown == 0:
         print("inbox empty")
@@ -111,16 +122,35 @@ def cmd_inbox(args: argparse.Namespace) -> None:
 def cmd_ack(args: argparse.Namespace) -> None:
     base = root()
     registered(base, args.session)
-    path = base / "mailboxes" / args.session / f"{args.message}.json"
+    message = valid_message_id(args.message)
+    path = base / "mailboxes" / args.session / f"{message}.json"
     if not path.is_file():
         raise ValueError("message not found in this session's inbox")
     item = load_json(path)
     if item.get("to") != args.session:
         raise ValueError("message recipient mismatch")
-    item["status"] = "read"
-    item["read_at"] = datetime.now(timezone.utc).isoformat()
-    atomic_json(path, item)
-    print(f"acknowledged: {args.message}")
+    if item.get("status") != "read":
+        item["status"] = "read"
+        item["read_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(path, item)
+    print(f"acknowledged: {message}")
+
+
+def cmd_reply(args: argparse.Namespace) -> None:
+    base = root()
+    session = valid_id(args.session)
+    original_id = valid_message_id(args.message)
+    registered(base, session)
+    path = base / "mailboxes" / session / f"{original_id}.json"
+    if not path.is_file():
+        raise ValueError("original message not found in this session's inbox")
+    original = load_json(path)
+    if original.get("to") != session:
+        raise ValueError("original message recipient mismatch")
+    if original.get("from") == session:
+        raise ValueError("cannot reply to a message sent by this session")
+    reply_id = enqueue(base, session, original["from"], args.body, original_id)
+    print(reply_id)
 
 
 def cmd_sessions(_args: argparse.Namespace) -> None:
@@ -145,7 +175,7 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("recipient")
     send.add_argument("body")
     send.set_defaults(run=cmd_send)
-    inbox = sub.add_parser("inbox", help="read messages addressed to a session")
+    inbox = sub.add_parser("inbox", help="read a mailbox")
     inbox.add_argument("session")
     inbox.add_argument("--pending", action="store_true", help="show only queued messages")
     inbox.add_argument("--limit", type=int, default=100)
@@ -154,7 +184,12 @@ def parser() -> argparse.ArgumentParser:
     ack.add_argument("session")
     ack.add_argument("message")
     ack.set_defaults(run=cmd_ack)
-    sessions = sub.add_parser("sessions", help="list registered sessions")
+    reply = sub.add_parser("reply", help="reply to a message in this session's inbox")
+    reply.add_argument("session")
+    reply.add_argument("message")
+    reply.add_argument("body")
+    reply.set_defaults(run=cmd_reply)
+    sessions = sub.add_parser("sessions", help="list registered identities")
     sessions.set_defaults(run=cmd_sessions)
     return p
 
@@ -166,7 +201,7 @@ def main() -> int:
             raise ValueError("limit must be >= 1")
         args.run(args)
         return 0
-    except (ValueError, OSError, json.JSONDecodeError) as exc:
+    except (ValueError, OSError, json.JSONDecodeError, KeyError) as exc:
         print(f"session-bus: {exc}", file=sys.stderr)
         return 2
 
