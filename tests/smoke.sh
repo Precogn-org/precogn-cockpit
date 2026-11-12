@@ -7,7 +7,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 bash -n "$ROOT/bin/boss-ask.sh"
 bash -n "$ROOT/bin/boss-attendre.sh"
-PYTHONPYCACHEPREFIX="$TMP/pycache" python3 -m py_compile "$ROOT/bin/canal_boss.py"
+PYTHONPYCACHEPREFIX="$TMP/pycache" python3 -m py_compile "$ROOT/bin/canal_boss.py" "$ROOT/bin/session-bus.py"
 
 BOSS_BASE="$TMP/cockpit" CLAUDE_BIN=/bin/true bash "$ROOT/bin/boss-ask.sh" >"$TMP/ask.out"
 grep -q 'AUCUNE nouvelle réponse' "$TMP/ask.out"
@@ -22,4 +22,24 @@ CANAL_BOSS_CWD="$TMP" \
 CLAUDE_BIN=/bin/true \
 python3 "$ROOT/bin/canal_boss.py" --dry
 
-echo 'PASS: syntax checks and isolated offline smoke checks.'
+export COCKPIT_BUS_DIR="$TMP/bus"
+python3 "$ROOT/bin/session-bus.py" register gpt-main "ChatGPT main" --kind chatgpt >"$TMP/register1.out"
+python3 "$ROOT/bin/session-bus.py" register claude-v00 "Claude V00" --kind claude-code >"$TMP/register2.out"
+MSG_ID="$(python3 "$ROOT/bin/session-bus.py" send gpt-main claude-v00 "Review the design." )"
+python3 "$ROOT/bin/session-bus.py" inbox claude-v00 --pending >"$TMP/inbox.out"
+grep -q "$MSG_ID" "$TMP/inbox.out"
+grep -q 'Review the design.' "$TMP/inbox.out"
+python3 "$ROOT/bin/session-bus.py" ack claude-v00 "$MSG_ID" >"$TMP/ack.out"
+python3 "$ROOT/bin/session-bus.py" inbox claude-v00 --pending >"$TMP/empty.out"
+grep -q 'inbox empty' "$TMP/empty.out"
+REPLY_ID="$(python3 "$ROOT/bin/session-bus.py" reply claude-v00 "$MSG_ID" "Review complete.")"
+python3 "$ROOT/bin/session-bus.py" inbox gpt-main --pending >"$TMP/reply.out"
+grep -q "$REPLY_ID" "$TMP/reply.out"
+grep -q "$MSG_ID" "$TMP/reply.out"
+grep -q 'Review complete.' "$TMP/reply.out"
+if python3 "$ROOT/bin/session-bus.py" reply claude-v00 "$REPLY_ID" "invalid"; then
+  echo "ERROR: reply outside the recipient inbox unexpectedly succeeded" >&2
+  exit 1
+fi
+
+echo 'PASS: syntax checks, existing bridge checks, and isolated message-bus checks.'
