@@ -37,7 +37,7 @@ python3 "$ROOT/bin/session-bus.py" inbox gpt-main --pending >"$TMP/reply.out"
 grep -q "$REPLY_ID" "$TMP/reply.out"
 grep -q "$MSG_ID" "$TMP/reply.out"
 grep -q 'Review complete.' "$TMP/reply.out"
-if python3 "$ROOT/bin/session-bus.py" reply gpt-main "$REPLY_ID" "invalid"; then
+if python3 "$ROOT/bin/session-bus.py" reply claude-v00 "$REPLY_ID" "invalid"; then
   echo "ERROR: reply outside the recipient inbox unexpectedly succeeded" >&2
   exit 1
 fi
