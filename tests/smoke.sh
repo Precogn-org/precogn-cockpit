@@ -32,5 +32,14 @@ grep -q 'Review the design.' "$TMP/inbox.out"
 python3 "$ROOT/bin/session-bus.py" ack claude-v00 "$MSG_ID" >"$TMP/ack.out"
 python3 "$ROOT/bin/session-bus.py" inbox claude-v00 --pending >"$TMP/empty.out"
 grep -q 'inbox empty' "$TMP/empty.out"
+REPLY_ID="$(python3 "$ROOT/bin/session-bus.py" reply claude-v00 "$MSG_ID" "Review complete.")"
+python3 "$ROOT/bin/session-bus.py" inbox gpt-main --pending >"$TMP/reply.out"
+grep -q "$REPLY_ID" "$TMP/reply.out"
+grep -q "$MSG_ID" "$TMP/reply.out"
+grep -q 'Review complete.' "$TMP/reply.out"
+if python3 "$ROOT/bin/session-bus.py" reply gpt-main "$REPLY_ID" "invalid"; then
+  echo "ERROR: reply outside the recipient inbox unexpectedly succeeded" >&2
+  exit 1
+fi
 
 echo 'PASS: syntax checks, existing bridge checks, and isolated message-bus checks.'
