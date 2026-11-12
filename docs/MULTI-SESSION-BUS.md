@@ -14,6 +14,7 @@ conversation histories or make one model directly aware of another session.
 - `send FROM TO "message"`: queue a message for another registered session.
 - `inbox SESSION [--pending] [--limit N]`: read a mailbox.
 - `ack SESSION MESSAGE_ID`: mark a message as read.
+- `reply SESSION MESSAGE_ID "message"`: reply to a message in the session inbox; the reply records `in_reply_to`.
 - `sessions`: list registered identities.
 
 Set `COCKPIT_BUS_DIR` to override the default
