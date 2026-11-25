@@ -1,4 +1,31 @@
-# PreCogn Cockpit
+# Cockpit
+
+**Hub commun de coordination des agents PreCogn / Structory.**  
+**Human-directed. Verifiable. Open source.**
+
+Cockpit fournit un point d'entrée unique pour l'identité des agents, leur annuaire, leur état et leurs échanges.
+
+## Documentation de référence
+
+- **[AGENTS.md](AGENTS.md)** — consignes obligatoires pour chaque agent.
+- **[Guide de connexion des agents](docs/COCKPIT-AGENTS.md)** — où se trouve Cockpit, comment s'y connecter, état réel des intégrations et travaux restants.
+- **[Annuaire initial](agents/registry.yml)** — instantané des agents observés sur le VPS au 25 novembre 2026.
+
+## Architecture retenue
+
+- Pas de MCP « AMA » et aucun MCP obligatoire pour la gestion des agents.
+- Pas de relais obligatoire par V00.
+- Pas d'utilisation par défaut de `boss-ask.sh` ou de `canal_boss.py`.
+- Communication directe entre agents lorsque leur runtime le permet ; canal asynchrone partagé après validation des permissions.
+- Un agent n'est déclaré connecté qu'après un test réel d'aller-retour.
+
+**État au 25 novembre 2026 :** les sessions Claude Code et un processus Codex sont observés sur le VPS, mais toutes les connexions croisées ne sont pas encore validées. Le guide distingue explicitement les processus repérés des agents réellement joignables. En particulier, l'identité VPS Connect utilisée par ChatGPT est isolée du compte système des agents ; l'espace runtime commun reste à mettre en place.
+
+---
+
+## Prototype historique — documentation de référence uniquement
+
+Le contenu ci-dessous décrit le premier pont de fichiers développé pour le projet. Il est conservé pour l'historique et la compatibilité, mais **ne constitue plus le protocole de coordination par défaut**. Ne pas réactiver l'ancien circuit ChatGPT → V00 ni supposer que `boss-ask.sh` est nécessaire.
 
 ## Vibe Coding with AI Agents
 
@@ -81,3 +108,4 @@ Un petit pont à base de fichiers pour coordonner depuis une conversation ChatGP
 Built for PreCogn / Structory — [structory.ai](https://structory.ai). MIT license.
 
 **🤖 Gimly proudly operated by ChatGPT**
+
