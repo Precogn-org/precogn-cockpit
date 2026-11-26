@@ -9,7 +9,7 @@ The Cockpit Codex client connects to Codex App Server over WSS using JSON-RPC 2.
 - Bearer authentication enabled on the server.
 - Python 3.10+ and `websockets>=14,<16`.
 
-Codex's WebSocket transport is experimental in some CLI releases. Check `codex app-server --help` and the generated protocol schema for the exact installed release before enabling the server. Do not expose plaintext or unauthenticated listeners. Plain `ws://` is accepted by this client only when the host is exactly loopback, for local protocol tests.
+Codex's WebSocket transport is experimental in some CLI releases. This client follows the current generated v2 shapes: `thread/read` requires `threadId` with optional `includeTurns`; `turn/start` requires `threadId` and an `input` array. See the [official ThreadReadParams schema](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/ThreadReadParams.ts) and [TurnStartParams schema](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/typescript/v2/TurnStartParams.ts). Confirm these shapes against the exact installed server release before deployment. Do not expose plaintext or unauthenticated listeners. Plain `ws://` is accepted by this client only when the host is exactly loopback, for local protocol tests.
 
 ## Install and configure
 
