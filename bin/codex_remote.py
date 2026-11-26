@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 
 class CodexRemoteError(RuntimeError):
@@ -34,10 +35,13 @@ class CodexRemoteClient:
         on_reconnect: Callable[["CodexRemoteClient"], None] | None = None,
         allow_model_turns: bool = False,
     ) -> None:
-        if not url.startswith("wss://") and not (
-            connector is not None and url.startswith("ws://127.0.0.1")
-        ):
-            raise ValueError("remote Codex endpoint must use wss://")
+        parsed_url = urlsplit(url)
+        local_test_endpoint = (
+            parsed_url.scheme == "ws"
+            and parsed_url.hostname in {"127.0.0.1", "::1"}
+        )
+        if parsed_url.scheme != "wss" and not local_test_endpoint:
+            raise ValueError("remote Codex endpoint must use wss:// (ws:// is allowed only on loopback)")
         self.url = url
         self.token_file = Path(token_file)
         self._connector = connector
