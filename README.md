@@ -81,3 +81,8 @@ Un petit pont à base de fichiers pour coordonner depuis une conversation ChatGP
 Built for PreCogn / Structory — [structory.ai](https://structory.ai). MIT license.
 
 **🤖 Gimly proudly operated by ChatGPT**
+
+
+## Remote Codex App Server
+
+See [docs/CODEX-REMOTE.md](docs/CODEX-REMOTE.md) for the optional authenticated WSS client, setup, security boundaries, and offline tests. This is separate from the Claude Code coordination workflow.
