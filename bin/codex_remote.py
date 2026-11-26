@@ -1,22 +1,26 @@
-"""Authenticated, read-only-first client for a remote Codex App Server."""
+"""Authenticated Codex App Server client over WebSocket JSON-RPC."""
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+
 class CodexRemoteError(RuntimeError):
     pass
 
-class CodexRemoteClient:
-    """Synchronous JSON-RPC client over Codex's WebSocket transport.
 
-    The client never replays an in-flight request after reconnecting. Callers must
-    decide whether retrying a failed operation is safe.
+class CodexRemoteClient:
+    """Persistent, bidirectional Codex WebSocket client.
+
+    Notifications are dispatched on a worker thread. Server requests are never
+    approved implicitly. Interrupted requests fail and are never replayed.
     """
 
     def __init__(
@@ -26,18 +30,30 @@ class CodexRemoteClient:
         *,
         connector: Callable[..., Any] | None = None,
         on_notification: Callable[[dict[str, Any]], None] | None = None,
-        on_server_request: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+        on_server_request: Callable[[dict[str, Any]], Any] | None = None,
+        on_reconnect: Callable[["CodexRemoteClient"], None] | None = None,
+        allow_model_turns: bool = False,
     ) -> None:
-        if not url.startswith("wss://"):
+        if not url.startswith("wss://") and not (
+            connector is not None and url.startswith("ws://127.0.0.1")
+        ):
             raise ValueError("remote Codex endpoint must use wss://")
         self.url = url
         self.token_file = Path(token_file)
         self._connector = connector
-        self._socket: Any | None = None
-        self._next_id = 1
         self.on_notification = on_notification or (lambda _message: None)
-        # None means reject server requests. Never approve commands implicitly.
         self.on_server_request = on_server_request
+        self.on_reconnect = on_reconnect
+        self.allow_model_turns = allow_model_turns
+        self._socket: Any | None = None
+        self._reader: threading.Thread | None = None
+        self._next_id = 1
+        self._lock = threading.Lock()
+        self._pending: dict[int, concurrent.futures.Future[Any]] = {}
+        self._callbacks = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="codex-remote-callback"
+        )
+        self._closed = False
 
     def _read_token(self) -> str:
         info = self.token_file.stat()
@@ -51,56 +67,75 @@ class CodexRemoteClient:
         return token
 
     def connect(self) -> dict[str, Any]:
-        token = self._read_token()
+        with self._lock:
+            if self._socket is not None:
+                raise CodexRemoteError("already connected")
+            self._closed = False
         connector = self._connector
         if connector is None:
             try:
                 from websockets.sync.client import connect as connector
             except ImportError as exc:
                 raise RuntimeError("install requirements-codex-remote.txt") from exc
-        self._socket = connector(
+        socket = connector(
             self.url,
-            additional_headers={"Authorization": f"Bearer {token}"},
+            additional_headers={"Authorization": f"Bearer {self._read_token()}"},
             open_timeout=10,
             ping_interval=20,
             close_timeout=5,
         )
-        result = self.request("initialize", {
-            "clientInfo": {"name": "precogn-cockpit", "title": "PreCogn Cockpit", "version": "0.1.0"},
-            "capabilities": {},
-        })
-        self.notify("initialized", {})
-        return result
+        with self._lock:
+            self._socket = socket
+        self._reader = threading.Thread(target=self._read_loop, daemon=True, name="codex-remote-reader")
+        self._reader.start()
+        try:
+            result = self.request("initialize", {
+                "clientInfo": {"name": "precogn-cockpit", "title": "PreCogn Cockpit", "version": "0.1.0"},
+                "capabilities": {},
+            })
+            self.notify("initialized", {})
+            return result
+        except Exception:
+            self.close()
+            raise
 
     def close(self) -> None:
-        socket, self._socket = self._socket, None
+        with self._lock:
+            self._closed = True
+            socket, self._socket = self._socket, None
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for future in pending:
+            if not future.done():
+                future.set_exception(CodexRemoteError("connection closed"))
         if socket is not None:
             socket.close()
+        reader = self._reader
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=2)
+        self._reader = None
+        self._callbacks.shutdown(wait=False, cancel_futures=True)
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
-        self._require_socket().send(json.dumps({"method": method, "params": params or {}}))
+        self._send({"method": method, "params": params or {}})
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        socket = self._require_socket()
-        request_id = self._next_id
-        self._next_id += 1
-        socket.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
-        while True:
-            message = self._receive()
-            if "method" in message and "id" not in message:
-                self.on_notification(message)
-                continue
-            if "method" in message and "id" in message:
-                self._answer_server_request(message)
-                continue
-            if message.get("id") != request_id:
-                continue
-            if "error" in message:
-                error = message["error"]
-                raise CodexRemoteError(f"Codex RPC {method} failed ({error.get('code')}): {error.get('message')}")
-            if "result" not in message:
-                raise CodexRemoteError("Codex RPC response has neither result nor error")
-            return message["result"]
+    def request(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> Any:
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        with self._lock:
+            socket = self._socket
+            if socket is None:
+                raise CodexRemoteError("not connected")
+            request_id = self._next_id
+            self._next_id += 1
+            self._pending[request_id] = future
+        try:
+            socket.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            raise CodexRemoteError(f"Codex RPC {method} timed out") from exc
+        finally:
+            with self._lock:
+                self._pending.pop(request_id, None)
 
     def list_threads(self, params: dict[str, Any] | None = None) -> Any:
         return self.request("thread/list", params)
@@ -110,42 +145,126 @@ class CodexRemoteClient:
             raise ValueError("thread_id is required")
         return self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
 
+    def start_turn(
+        self,
+        thread_id: str,
+        input_items: list[dict[str, Any]] | str,
+        *,
+        confirm_model_turn: bool = False,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Start one billable-capable turn only after two explicit opt-ins.
+
+        Streamed events arrive through on_notification until turn/completed.
+        """
+        if self.allow_model_turns is not True or confirm_model_turn is not True:
+            raise PermissionError("model turns require client opt-in and per-call confirmation")
+        if not thread_id:
+            raise ValueError("thread_id is required")
+        items = [{"type": "text", "text": input_items}] if isinstance(input_items, str) else input_items
+        if not isinstance(items, list) or not items:
+            raise ValueError("input_items must be a non-empty list or text")
+        request_params = dict(params or {})
+        request_params.update({"threadId": thread_id, "input": items})
+        return self.request("turn/start", request_params)
+
     def reconnect(self, *, attempts: int = 5, initial_delay: float = 0.5) -> dict[str, Any]:
-        """Reconnect and reinitialize; does not retry or replay the interrupted RPC."""
+        """Reconnect, initialize, and invoke the caller's state resynchronizer.
+
+        Interrupted calls fail; this method never replays them.
+        """
         self.close()
+        self._callbacks = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="codex-remote-callback"
+        )
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
-                return self.connect()
+                result = self.connect()
+                if self.on_reconnect is not None:
+                    self.on_reconnect(self)
+                return result
             except Exception as exc:
                 last_error = exc
                 self.close()
+                self._callbacks = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=4, thread_name_prefix="codex-remote-callback"
+                )
                 if attempt + 1 < attempts:
                     time.sleep(min(initial_delay * (2 ** attempt), 8.0))
         raise CodexRemoteError(f"reconnect failed after {attempts} attempts: {last_error}") from last_error
 
-    def _answer_server_request(self, message: dict[str, Any]) -> None:
-        socket = self._require_socket()
-        request_id = message["id"]
-        if self.on_server_request is None:
-            socket.send(json.dumps({
-                "id": request_id,
-                "error": {"code": -32000, "message": "Cockpit has no handler for this server request"},
-            }))
-            return
-        result = self.on_server_request(message)
-        socket.send(json.dumps({"id": request_id, "result": result or {}}))
-
-    def _receive(self) -> dict[str, Any]:
-        try:
-            message = json.loads(self._require_socket().recv())
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise CodexRemoteError("invalid JSON-RPC message from Codex") from exc
-        if not isinstance(message, dict):
-            raise CodexRemoteError("Codex message must be a JSON object")
-        return message
-
-    def _require_socket(self) -> Any:
-        if self._socket is None:
+    def _send(self, message: dict[str, Any]) -> None:
+        with self._lock:
+            socket = self._socket
+        if socket is None:
             raise CodexRemoteError("not connected")
-        return self._socket
+        socket.send(json.dumps(message))
+
+    def _read_loop(self) -> None:
+        while True:
+            with self._lock:
+                socket = self._socket
+                closed = self._closed
+            if socket is None or closed:
+                return
+            try:
+                raw = socket.recv()
+                message = json.loads(raw)
+                if not isinstance(message, dict):
+                    raise CodexRemoteError("Codex message must be a JSON object")
+            except Exception as exc:
+                self._connection_lost(socket, exc)
+                return
+            if "method" in message and "id" not in message:
+                self._callbacks.submit(self._safe_notification, message)
+            elif "method" in message and "id" in message:
+                self._callbacks.submit(self._handle_server_request, socket, message)
+            elif "id" in message:
+                with self._lock:
+                    future = self._pending.get(message["id"])
+                if future is not None and not future.done():
+                    if "error" in message:
+                        error = message["error"]
+                        future.set_exception(CodexRemoteError(
+                            f"Codex RPC failed ({error.get('code')}): {error.get('message')}"
+                        ))
+                    elif "result" in message:
+                        future.set_result(message["result"])
+                    else:
+                        future.set_exception(CodexRemoteError("response has neither result nor error"))
+
+    def _safe_notification(self, message: dict[str, Any]) -> None:
+        try:
+            self.on_notification(message)
+        except Exception:
+            # User callbacks must not terminate the socket reader.
+            return
+
+    def _handle_server_request(self, socket: Any, message: dict[str, Any]) -> None:
+        request_id = message["id"]
+        try:
+            if self.on_server_request is None:
+                raise PermissionError("no explicit handler configured")
+            result = self.on_server_request(message)
+            response = {"id": request_id, "result": result if result is not None else {}}
+        except PermissionError as exc:
+            response = {"id": request_id, "error": {"code": -32000, "message": str(exc)}}
+        except Exception as exc:
+            response = {"id": request_id, "error": {"code": -32603, "message": str(exc)}}
+        try:
+            socket.send(json.dumps(response))
+        except Exception:
+            return
+
+    def _connection_lost(self, socket: Any, cause: Exception) -> None:
+        with self._lock:
+            if self._socket is not socket:
+                return
+            self._socket = None
+            pending = list(self._pending.values())
+            self._pending.clear()
+        failure = CodexRemoteError(f"Codex WebSocket disconnected: {cause}")
+        for future in pending:
+            if not future.done():
+                future.set_exception(failure)
