@@ -59,7 +59,7 @@ class CodexRemoteTests(unittest.TestCase):
         fake = FakeSocket([
             {"id": 1, "result": {}},
             {"id": 99, "method": "item/commandExecution/requestApproval", "params": {}},
-            {"id": 3, "result": {"data": []}},
+            {"id": 2, "result": {"data": []}},
         ])
         client = CodexRemoteClient("wss://codex.example/rpc", self.token,
                                    connector=lambda *_a, **_k: fake)
