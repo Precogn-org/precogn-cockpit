@@ -58,14 +58,14 @@ class CodexRemoteTests(unittest.TestCase):
     def test_server_requests_are_rejected_by_default(self):
         fake = FakeSocket([
             {"id": 1, "result": {}},
-            {"id": 2, "method": "item/commandExecution/requestApproval", "params": {}},
+            {"id": 99, "method": "item/commandExecution/requestApproval", "params": {}},
             {"id": 3, "result": {"data": []}},
         ])
         client = CodexRemoteClient("wss://codex.example/rpc", self.token,
                                    connector=lambda *_a, **_k: fake)
         client.connect()
         client.list_threads()
-        self.assertEqual(fake.sent[2]["id"], 2)
+        self.assertEqual(fake.sent[2]["id"], 99)
         self.assertIn("error", fake.sent[2])
         self.assertNotIn("result", fake.sent[2])
 
