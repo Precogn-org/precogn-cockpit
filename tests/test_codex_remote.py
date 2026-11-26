@@ -65,9 +65,9 @@ class CodexRemoteTests(unittest.TestCase):
                                    connector=lambda *_a, **_k: fake)
         client.connect()
         client.list_threads()
-        self.assertEqual(fake.sent[2]["id"], 99)
-        self.assertIn("error", fake.sent[2])
-        self.assertNotIn("result", fake.sent[2])
+        self.assertEqual(fake.sent[3]["id"], 99)
+        self.assertIn("error", fake.sent[3])
+        self.assertNotIn("result", fake.sent[3])
 
     def test_token_file_permissions_are_checked(self):
         if os.name != "posix":
