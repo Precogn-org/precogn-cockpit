@@ -9,6 +9,7 @@ Cockpit fournit un point d'entrée unique pour l'identité des agents, leur annu
 
 - **[AGENTS.md](AGENTS.md)** — consignes obligatoires pour chaque agent.
 - **[Guide de connexion des agents](docs/COCKPIT-AGENTS.md)** — où se trouve Cockpit, comment s'y connecter, état réel des intégrations et travaux restants.
+- **[MCP officiel Cloudflare](docs/CLOUDFLARE-API-MCP.md)** — configuration OAuth, limites et règles de sécurité du connecteur Cloudflare.
 - **[Annuaire initial](agents/registry.yml)** — instantané des agents observés sur le VPS au 25 novembre 2026.
 
 ## Architecture retenue
